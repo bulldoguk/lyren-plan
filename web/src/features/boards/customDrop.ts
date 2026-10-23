@@ -97,6 +97,11 @@ export function dropPatchWarnings(
     tags: (patch.addTagIds ?? []).map((id) => ({ id, name: ctx.lookups.tagById.get(id)?.name ?? '', color: '#000000' })),
     commentCount: 0,
     worklogMinutes: 0,
+    blockedBy: [],
+    blocks: [],
+    adjustedStartDate: null,
+    adjustedDueDate: patch.dueDate ?? null,
+    slipDays: 0,
   };
   for (const c of CRITERIA) {
     const keys = c.keys.filter((k) => present(match, k));

@@ -18,7 +18,7 @@ import { Checkbox } from '../ui';
 import { EpicBadge, MilestoneBadge, ProjectBadge, TaskRef } from './EntityBadges';
 import { statusFraction } from './entityGroups';
 import { taskItemPropsEqual } from './memoCompare';
-import { CommentCountLabel, DueDateLabel, DurationLabel, EstimateLabel, StartDateLabel } from './MetaLabels';
+import { BlockedLabel, CommentCountLabel, DueDateLabel, DurationLabel, EstimateLabel, StartDateLabel } from './MetaLabels';
 import { isOpenClick, OPEN_TASK_PROPS, stopCardEvents } from './openClick';
 import { Pill } from './Pill';
 import { PriorityIcon, priorityLabel } from './PriorityIcon';
@@ -241,7 +241,10 @@ const TaskRowImpl = forwardRef<HTMLDivElement, TaskRowProps>(function TaskRow(
             {epic && <EpicBadge epic={epic} />}
             {milestone && <MilestoneBadge milestone={milestone} />}
             {project && <ProjectBadge project={project} />}
-            {f.dueDate && <DueDateLabel date={task.dueDate} today={today} closed={closed !== null} />}
+            {f.dueDate && (
+              <DueDateLabel date={task.dueDate} adjusted={task.adjustedDueDate} slipDays={task.slipDays} today={today} closed={closed !== null} />
+            )}
+            {closed === null && <BlockedLabel count={task.blockedBy.length} />}
             {f.startDate && <StartDateLabel date={task.startDate} today={today} />}
             {f.estimate && <EstimateLabel value={task.estimate} unit={lookups.settings.estimateUnit} />}
             {f.commentCount && task.commentCount > 0 && <CommentCountLabel count={task.commentCount} />}

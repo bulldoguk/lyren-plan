@@ -209,6 +209,11 @@ describe('changePhrase — every task field', () => {
     );
   });
 
+  it('blockers (task dependencies)', () => {
+    expect(p({ field: 'blockedBy', added: ['WEB-3'], removed: [] })).toBe('made it wait on WEB-3');
+    expect(p({ field: 'blockedBy', added: [], removed: ['WEB-3'] })).toBe('removed the link to WEB-3');
+  });
+
   it('estimate in the configured unit', () => {
     expect(p({ field: 'estimate', from: null, to: 3 })).toBe('set the estimate to 3 pts');
     expect(p({ field: 'estimate', from: 1, to: 1.5 }, { settings: { estimateUnit: 'hours' } })).toBe('changed the estimate from 1h to 1.5h');

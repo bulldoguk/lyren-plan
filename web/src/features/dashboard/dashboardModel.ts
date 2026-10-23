@@ -2,6 +2,7 @@
 
 import { isClosedCategory, STATUS_CATEGORIES, type StatusCategory } from '@shared/constants';
 import { addDays } from '@shared/dates';
+import { effectiveDueDate } from '@shared/filter';
 import type { TaskFilter, TaskQueryInput, TaskSort } from '@shared/schemas';
 import type { DashboardDTO, MilestoneDTO, ProjectDTO, TaskDTO } from '@shared/types';
 
@@ -46,7 +47,8 @@ export function dueTomorrowHint(dueSoon: readonly Pick<TaskDTO, 'dueDate'>[], du
 // section loads the rest from POST /api/tasks/query with the section's own filter, a page at a
 // time, and shows it in the dashboard's order.
 
-export type DashboardSection = keyof DashboardDTO['counts'];
+/** The sections of DashboardDTO['counts'], and the slipped tasks (DashboardDTO.slipped; listed by the client). */
+export type DashboardSection = keyof DashboardDTO['counts'] | 'slipped';
 
 /** Windows of the dashboard lists (server/src/routes/dashboard.ts DASHBOARD_LIMITS). */
 export const DASHBOARD_WINDOWS = { dueSoonDays: 7, recentlyClosedDays: 7 } as const;
@@ -67,6 +69,8 @@ export function dashboardSectionFilter(section: DashboardSection, today: string)
       return { statusCategories: ['started'] };
     case 'recentlyClosed':
       return { statusCategories: CLOSED_CATEGORIES, closedWithinDays: DASHBOARD_WINDOWS.recentlyClosedDays };
+    case 'slipped':
+      return { slipped: true, statusCategories: OPEN_CATEGORIES };
   }
 }
 
@@ -83,6 +87,7 @@ const SECTION_SORT: Record<DashboardSection, TaskSort> = {
   dueSoon: { field: 'dueDate', dir: 'asc' },
   inProgress: { field: 'updatedAt', dir: 'desc' },
   recentlyClosed: { field: 'updatedAt', dir: 'desc' },
+  slipped: { field: 'dueDate', dir: 'asc' },
 };
 
 /** POST /api/tasks/query input for the first `limit` tasks of a section. */
@@ -95,7 +100,8 @@ const asc = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 /** Urgent first: priority 4 → 1, "no priority" (0) last. */
 const byPriority: Compare = (a, b) => (a.priority === 0 ? 5 : -a.priority) - (b.priority === 0 ? 5 : -b.priority);
 const byRankThenId: Compare = (a, b) => asc(a.rank, b.rank) || a.id - b.id;
-const byDue: Compare = (a, b) => asc(a.dueDate ?? '', b.dueDate ?? '');
+/** By the due date lists go by: a slipped task's adjusted one (effectiveDueDate). */
+const byDue: Compare = (a, b) => asc(effectiveDueDate(a) ?? '', effectiveDueDate(b) ?? '');
 
 /**
  * The order of each dashboard list (server ORDER in routes/dashboard.ts): by due date, then
@@ -106,6 +112,7 @@ export function compareDashboardTasks(section: DashboardSection): Compare {
   switch (section) {
     case 'overdue':
     case 'dueSoon':
+    case 'slipped':
       return (a, b) => byDue(a, b) || byPriority(a, b) || byRankThenId(a, b);
     case 'dueToday':
       return (a, b) => byPriority(a, b) || byRankThenId(a, b);

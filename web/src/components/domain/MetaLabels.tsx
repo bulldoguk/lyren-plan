@@ -1,7 +1,7 @@
 // Small metadata labels for tasks: due/start dates, estimate, logged time, comment count.
 // Each has a distinct icon and screen-reader text, so color is never the only signal.
 
-import { CalendarArrowUp, CalendarClock, CalendarDays, CircleAlert, Clock, Gauge, Hourglass, MessageSquare } from 'lucide-react';
+import { CalendarArrowUp, CalendarClock, CalendarDays, CircleAlert, Clock, Gauge, Hourglass, Link2, MessageSquare } from 'lucide-react';
 import type { EstimateUnit } from '@shared/constants';
 import type { ISODate } from '@shared/dates';
 import { formatMinutes } from '@shared/duration';
@@ -28,6 +28,12 @@ export interface DueDateLabelProps extends LabelBaseProps {
   closed?: boolean;
   /** Spell the state out ("Overdue · Oct 3", "Due today") instead of the date alone. */
   verbose?: boolean;
+  /**
+   * Days the task's blockers push its due date (TaskDTO.slipDays): when > 0, `adjusted` is the date shown and
+   * judged, with the slip beside it ("Nov 1 · +2d"); `date` stays the due date its title names.
+   */
+  slipDays?: number;
+  adjusted?: ISODate | null;
 }
 
 const DUE_TONE: Record<DueState, PillTone> = {
@@ -42,9 +48,21 @@ const DUE_TONE: Record<DueState, PillTone> = {
  * Due date relative to today ("Today", "Tomorrow", "Fri, Oct 16", "Oct 3"). Overdue open
  * tasks are red with an alert icon, due-today ones amber; closed tasks stay muted.
  */
-export function DueDateLabel({ date, today: todayProp, closed = false, verbose, size = 'sm', plain, className }: DueDateLabelProps) {
+export function DueDateLabel({
+  date: own,
+  today: todayProp,
+  closed = false,
+  verbose,
+  slipDays = 0,
+  adjusted,
+  size = 'sm',
+  plain,
+  className,
+}: DueDateLabelProps) {
   const sharedToday = useSharedToday();
-  if (!date) return null;
+  if (!own) return null;
+  const slipped = slipDays > 0 && !!adjusted && !closed;
+  const date = slipped ? adjusted : own;
   const today = todayProp ?? sharedToday;
   const state = dueState(date, today, closed);
   const relative = formatDueDate(date, today);
@@ -58,11 +76,20 @@ export function DueDateLabel({ date, today: todayProp, closed = false, verbose, 
       plain={plain}
       tone={DUE_TONE[state]}
       className={className}
-      title={`${state === 'overdue' ? 'Overdue — due' : 'Due'} ${formatDateLong(date)}`}
+      title={
+        `${state === 'overdue' ? 'Overdue — due' : 'Due'} ${formatDateLong(date)}` +
+        (slipped ? `: slipped ${slipDays} ${slipDays === 1 ? 'day' : 'days'} from ${formatDateLong(own)} by its blockers` : '')
+      }
       icon={<Icon aria-hidden />}
     >
       {spoken && <span className="sr-only">{spoken}</span>}
       {visible}
+      {slipped && (
+        <>
+          <span aria-hidden> · +{slipDays}d</span>
+          <span className="sr-only">, slipped {slipDays} {slipDays === 1 ? 'day' : 'days'} by its blockers</span>
+        </>
+      )}
     </Pill>
   );
 }
@@ -81,6 +108,23 @@ export function StartDateLabel({ date, today: todayProp, size = 'sm', plain, cla
     <Pill size={size} plain={plain} className={className} title={`Start ${formatDateLong(date)}`} icon={<CalendarArrowUp aria-hidden />}>
       <span className="sr-only">{date > today ? 'Starts ' : 'Started '}</span>
       {formatDueDate(date, today)}
+    </Pill>
+  );
+}
+
+export interface BlockedLabelProps extends LabelBaseProps {
+  /** How many tasks this one waits on (TaskDTO.blockedBy). */
+  count: number;
+}
+
+/** A chain icon on a task that waits on others (task dependencies). */
+export function BlockedLabel({ count, size = 'sm', plain = true, className }: BlockedLabelProps) {
+  if (count === 0) return null;
+  return (
+    <Pill size={size} plain={plain} className={className} title={`Blocked by ${count} ${count === 1 ? 'task' : 'tasks'}`} icon={<Link2 aria-hidden />}>
+      <span className="sr-only">
+        Blocked by {count} {count === 1 ? 'task' : 'tasks'}
+      </span>
     </Pill>
   );
 }

@@ -37,9 +37,11 @@ export { TagChip, TagList, type TagChipProps, type TagListProps } from './Tags';
 export {
   CommentCountLabel,
   DueDateLabel,
+  BlockedLabel,
   DurationLabel,
   EstimateLabel,
   StartDateLabel,
+  type BlockedLabelProps,
   type CommentCountLabelProps,
   type DueDateLabelProps,
   type DurationLabelProps,

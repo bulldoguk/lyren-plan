@@ -10,6 +10,7 @@ import {
   CircleCheck,
   CircleDot,
   Coffee,
+  Link2,
   PartyPopper,
   Plus,
   Sparkles,
@@ -21,6 +22,7 @@ import { formatMinutes } from '@shared/duration';
 import type { DashboardDTO } from '@shared/types';
 import { useLookups } from '../../api/bootstrap';
 import { useDashboard } from '../../api/misc';
+import { useTaskQuery } from '../../api/tasks';
 import { useSpace, useSpacePath } from '../../app/space';
 import { Page } from '../../components/layout/Page';
 import { PageHeader } from '../../components/layout/PageHeader';
@@ -28,7 +30,7 @@ import { ButtonLink, Card, EmptyState, ErrorState, Skeleton } from '../../compon
 import { formatDate, formatDateLong, pluralize } from '../../lib/format';
 import { useDocumentTitle, useToday } from '../../lib/hooks';
 import { ActivityCard, ProjectsCard, StatTile, TaskSection, TaskSectionSkeleton } from './DashboardCards';
-import { dueTomorrowHint, greetingFor } from './dashboardModel';
+import { dashboardSectionQuery, dueTomorrowHint, greetingFor } from './dashboardModel';
 
 export default function DashboardPage() {
   useDocumentTitle('Dashboard');
@@ -50,6 +52,27 @@ export default function DashboardPage() {
     <Page width="wide" header={header}>
       {content}
     </Page>
+  );
+}
+
+/**
+ * Open tasks whose blockers push their due date later (task dependencies): only while there are any. The
+ * dashboard counts them; the list comes from the slipped filter.
+ */
+function SlippedSection({ total, today }: { total: number; today: string }) {
+  const query = useTaskQuery(dashboardSectionQuery('slipped', today, 50));
+  return (
+    <TaskSection
+      id="slipped"
+      section="slipped"
+      title="Slipped"
+      icon={<Link2 />}
+      tone="warning"
+      tasks={query.data?.tasks ?? []}
+      total={total}
+      today={today}
+      empty={{ icon: <Link2 />, text: query.isLoading ? 'Loading…' : 'Nothing has slipped.' }}
+    />
   );
 }
 
@@ -126,6 +149,7 @@ function DashboardContent({ data, today }: { data: DashboardDTO; today: string }
             today={today}
             empty={{ icon: <PartyPopper />, text: 'Nothing overdue — you’re all caught up.' }}
           />
+          {data.slipped > 0 && <SlippedSection total={data.slipped} today={today} />}
           <TaskSection
             id="due-today"
             section="dueToday"

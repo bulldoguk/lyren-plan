@@ -13,7 +13,7 @@ import { useLookups } from '../../api/bootstrap';
 import { useSpace } from '../../app/space';
 import { EpicBadge, MilestoneBadge, ProjectBadge, TaskRef } from './EntityBadges';
 import { statusFraction } from './entityGroups';
-import { CommentCountLabel, DueDateLabel, DurationLabel, EstimateLabel, StartDateLabel } from './MetaLabels';
+import { BlockedLabel, CommentCountLabel, DueDateLabel, DurationLabel, EstimateLabel, StartDateLabel } from './MetaLabels';
 import { taskItemPropsEqual } from './memoCompare';
 import { isOpenClick, OPEN_TASK_PROPS, stopCardEvents } from './openClick';
 import { Pill } from './Pill';
@@ -84,7 +84,17 @@ const TaskCardImpl = forwardRef<HTMLDivElement, TaskCardProps>(function TaskCard
   const showMeta = f.ref || !!project;
   const properties = [
     f.priority && task.priority > 0 && <Pill key="priority" icon={<PriorityIcon priority={task.priority} />} />,
-    f.dueDate && <DueDateLabel key="due" date={task.dueDate} today={today} closed={closed !== null} />,
+    f.dueDate && (
+      <DueDateLabel
+        key="due"
+        date={task.dueDate}
+        adjusted={task.adjustedDueDate}
+        slipDays={task.slipDays}
+        today={today}
+        closed={closed !== null}
+      />
+    ),
+    closed === null && task.blockedBy.length > 0 && <BlockedLabel key="blocked" count={task.blockedBy.length} />,
     f.startDate && <StartDateLabel key="start" date={task.startDate} today={today} />,
     f.estimate && <EstimateLabel key="estimate" value={task.estimate} unit={lookups.settings.estimateUnit} />,
     epic && <EpicBadge key="epic" epic={epic} />,

@@ -9,13 +9,15 @@ import {
 } from '@tanstack/react-query';
 import { generateKeyBetween } from 'fractional-indexing';
 import { isClosedCategory } from '@shared/constants';
+import { localToday } from '@shared/dates';
 import type {
+  RebaselineInput,
   TaskBulkUpdateInput,
   TaskCreateInput,
   TaskQueryInput,
   TaskUpdateInput,
 } from '@shared/schemas';
-import type { BootstrapDTO, TaskDTO, TaskQueryResult } from '@shared/types';
+import type { BootstrapDTO, RebaselineItemDTO, TaskDTO, TaskQueryResult } from '@shared/types';
 import { useSpaceId } from '../app/space';
 import { spaceApi } from './client';
 import { invalidateTasks, qk } from './keys';
@@ -38,7 +40,11 @@ export function useTaskQuery(input: TaskQueryInput, opts: { enabled?: boolean } 
 
 /** Query options of one task (GET /tasks/:id), shared by useTask and batch lookups (useQueries). */
 export function taskDetailQuery(spaceId: string, id: number) {
-  return { queryKey: qk.task(spaceId, id), queryFn: () => spaceApi(spaceId).get<TaskDTO>(`/tasks/${id}`) };
+  // Today's date, for the adjusted dates of a task with blockers (docs/design/task-dependencies.md).
+  return {
+    queryKey: qk.task(spaceId, id),
+    queryFn: () => spaceApi(spaceId).get<TaskDTO>(`/tasks/${id}?today=${localToday()}`),
+  };
 }
 
 /** `enabled: false` keeps returning cached data without fetching (e.g. a drawer that is closing). */
@@ -84,6 +90,11 @@ export function applyTaskPatch(
   if (patch.priority !== undefined) set('priority', patch.priority);
   if (patch.startDate !== undefined) set('startDate', patch.startDate);
   if (patch.dueDate !== undefined) set('dueDate', patch.dueDate);
+  // An unslipped task's adjusted dates are its own; a slipped one's wait for the server's answer.
+  if (task.slipDays === 0) {
+    next.adjustedStartDate = next.startDate;
+    next.adjustedDueDate = next.dueDate;
+  }
   if (patch.estimate !== undefined) set('estimate', patch.estimate);
   if (patch.archived !== undefined && patch.archived !== (task.archivedAt !== null)) {
     set('archivedAt', patch.archived ? new Date().toISOString() : null);
@@ -442,4 +453,45 @@ export function forgetDeletedTasks(qc: QueryClient, spaceId: string, ids: readon
   };
   qc.removeQueries({ queryKey: qk.tasksAll(spaceId), predicate: (q) => own(q) && q.getObserversCount() === 0 });
   return invalidateTasks(qc, spaceId, own);
+}
+
+// ---- Task dependencies (docs/design/task-dependencies.md) -------------------------
+
+/**
+ * Make `blockerId` block task `id` (POST /tasks/:id/blockers), or remove that link. A link moves the adjusted
+ * dates of everything downstream, so every task list refreshes.
+ */
+export function useTaskLink() {
+  const sid = useSpaceId();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, blockerId, remove }: { id: number; blockerId: number; remove?: boolean }) =>
+      remove
+        ? spaceApi(sid).del<TaskDTO>(`/tasks/${id}/blockers/${blockerId}`)
+        : spaceApi(sid).post<TaskDTO>(`/tasks/${id}/blockers`, { blockerId }),
+    onSuccess: (task) => {
+      writeTaskToCache(qc, sid, task);
+      return invalidateTasks(qc, sid);
+    },
+  });
+}
+
+/** The tasks a rebaseline would move (POST /tasks/rebaseline/preview): a project's, or a selection's. */
+export function useRebaselinePreview(input: RebaselineInput, opts: { enabled?: boolean } = {}) {
+  const sid = useSpaceId();
+  return useQuery({
+    queryKey: [...qk.tasksAll(sid), 'rebaseline', input],
+    queryFn: () => spaceApi(sid).post<{ items: RebaselineItemDTO[] }>('/tasks/rebaseline/preview', input),
+    enabled: opts.enabled ?? true,
+  });
+}
+
+/** Rebaseline (POST /tasks/rebaseline): copy the adjusted dates over the tasks' own. */
+export function useRebaseline() {
+  const sid = useSpaceId();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RebaselineInput) => spaceApi(sid).post<{ items: RebaselineItemDTO[] }>('/tasks/rebaseline', input),
+    onSuccess: () => invalidateTasks(qc, sid),
+  });
 }

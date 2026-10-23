@@ -3,7 +3,7 @@
 // unarchive, delete — one all-or-nothing request each, with the same items, messages and
 // Undo in both places so the two surfaces can't drift apart.
 
-import { Archive, ArchiveRestore, CalendarDays, CircleDashed, Layers, Tag, Tags, Trash2, X } from 'lucide-react';
+import { Archive, ArchiveRestore, CalendarDays, CalendarSync, CircleDashed, Layers, Tag, Tags, Trash2, X } from 'lucide-react';
 import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { PRIORITY_META } from '@shared/constants';
 import type { ISODate } from '@shared/dates';
@@ -28,10 +28,11 @@ import {
 import { Button, Dialog, PickerList, toast, useConfirm, useSheetMode, type MenuItem } from '../../components/ui';
 import { formatDate, pluralize } from '../../lib/format';
 import { useBulkDeleteTasksClosingDrawer } from './bulkDelete';
+import { RebaselineDialog } from './RebaselineDialog';
 import { archiveTargets, commonProjectId } from './taskListModel';
 
 type BulkPatch = TaskBulkUpdateInput['patch'];
-type DialogKind = 'due' | 'addTags' | 'removeTags' | null;
+type DialogKind = 'due' | 'addTags' | 'removeTags' | 'rebaseline' | null;
 
 export interface BulkTaskActions {
   /** A bulk request is running. */
@@ -169,6 +170,13 @@ export function useBulkTaskActions(tasks: readonly TaskDTO[], { onDeleted }: { o
     { separator: true },
     { label: 'Pick a date…', icon: <CalendarDays />, onSelect: () => setDialog('due') },
     { label: 'Clear due date', icon: <X />, onSelect: () => apply({ dueDate: null }, `Cleared the due date of ${noun}`) },
+    { separator: true },
+    {
+      label: 'Rebaseline slipped…',
+      icon: <CalendarSync />,
+      disabled: disabled || !tasks.some((t) => t.slipDays > 0),
+      onSelect: () => setDialog('rebaseline'),
+    },
   ];
 
   const projectId = commonProjectId(tasks);
@@ -210,6 +218,12 @@ export function useBulkTaskActions(tasks: readonly TaskDTO[], { onDeleted }: { o
         onClose={() => setDialog(null)}
         count={count}
         onSave={(dueDate) => apply({ dueDate }, dueDate ? `Due ${formatDate(dueDate, today)}: ${noun}` : `Cleared the due date of ${noun}`)}
+      />
+      <RebaselineDialog
+        open={dialog === 'rebaseline'}
+        onClose={() => setDialog(null)}
+        scope={{ ids: tasks.map((t) => t.id) }}
+        scopeLabel={`the ${pluralize(count, 'selected task')}`}
       />
       <BulkTagsDialog
         mode="add"

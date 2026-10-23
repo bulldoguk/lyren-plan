@@ -21,6 +21,7 @@ import { creatorText } from '../../lib/people';
 import { epicUrl, milestoneUrl, projectUrl } from '../../lib/taskLinks';
 import { TaskTimeline } from '../timeline/TaskTimeline';
 import { taskLink } from './taskHelpers';
+import { TaskDependencies } from './TaskDependencies';
 import { TaskDescription } from './TaskDescription';
 import { TaskProperties } from './TaskProperties';
 import { ignoreRejection, useTaskSave } from './useTaskSave';
@@ -88,6 +89,7 @@ export const TaskDetail = forwardRef<TaskDetailHandle, TaskDetailProps>(function
 
         <div className="flex min-w-0 flex-col gap-6 [grid-area:main]">
           <TaskDescription task={task} save={save} readOnly={!write} />
+          <TaskDependencies task={task} readOnly={!write} />
           <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-fg-subtle">
             <span title={formatDateTime(task.createdAt)}>
               Created {formatRelativeTime(task.createdAt)}

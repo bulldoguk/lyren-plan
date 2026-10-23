@@ -95,6 +95,11 @@ export function task(extra: Partial<TaskDTO> = {}): TaskDTO {
     tags: [],
     commentCount: 0,
     worklogMinutes: 0,
+    blockedBy: [],
+    blocks: [],
+    adjustedStartDate: extra.startDate ?? null,
+    adjustedDueDate: extra.dueDate ?? null,
+    slipDays: 0,
     ...extra,
   };
 }

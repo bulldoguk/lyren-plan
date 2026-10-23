@@ -3,7 +3,7 @@
 // Tasks / Activity tabs, and the child route. Milestone and epic pages render their own header (breadcrumb Project › …), so
 // for them this layout only provides the project through the outlet context.
 
-import { Archive, ArchiveRestore, FolderX, Info, Milestone as MilestoneIcon, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, CalendarSync, FolderX, Info, Milestone as MilestoneIcon, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Outlet, useLocation, useNavigate, useParams } from 'react-router';
 import { PROJECT_STATUSES } from '@shared/constants';
@@ -16,6 +16,7 @@ import { isBoolean, usePersistentState } from '../../components/layout/usePersis
 import { ButtonLink, EmptyState, IconButton, Markdown, normalizeMenuItems, toast } from '../../components/ui';
 import { useDocumentTitle } from '../../lib/hooks';
 import { projectUrl } from '../../lib/taskLinks';
+import { RebaselineDialog } from '../tasks/RebaselineDialog';
 import { DeleteProjectDialog } from './DeleteDialogs';
 import { LifecycleBadge, lifecycleMeta } from './LifecycleStatus';
 import { parseRouteId, type ProjectOutletContext } from './projectContext';
@@ -105,6 +106,7 @@ function ProjectChrome({
   const save = useSaveProject();
   const hierarchy = useHierarchyDialogs(project.id);
   const [editOpen, setEditOpen] = useState(false);
+  const [rebaselineOpen, setRebaselineOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ProjectDTO | null>(null);
   const [showDescription, setShowDescription] = usePersistentState('lyren.project.showDescription', false, isBoolean);
   const base = projectUrl(sid, project.id);
@@ -147,6 +149,7 @@ function ProjectChrome({
     { separator: true },
     write && { label: 'New milestone…', icon: <MilestoneIcon />, onSelect: hierarchy.newMilestone },
     write && { label: 'New epic…', icon: <Plus />, onSelect: () => hierarchy.newEpic(null) },
+    write && { label: 'Rebaseline slipped tasks…', icon: <CalendarSync />, onSelect: () => setRebaselineOpen(true) },
     { separator: true },
     deleteProjects && { label: 'Delete project…', icon: <Trash2 />, danger: true, onSelect: () => setDeleteTarget(project) },
   ]);
@@ -198,6 +201,12 @@ function ProjectChrome({
     <>
       {hierarchy.dialogs}
       <ProjectFormDialog open={editOpen} onClose={() => setEditOpen(false)} project={project} />
+      <RebaselineDialog
+        open={rebaselineOpen}
+        onClose={() => setRebaselineOpen(false)}
+        scope={{ projectId: project.id }}
+        scopeLabel={project.name}
+      />
       <DeleteProjectDialog
         project={deleteTarget}
         onClose={() => setDeleteTarget(null)}

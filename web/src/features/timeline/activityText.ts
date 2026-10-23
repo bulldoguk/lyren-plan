@@ -117,6 +117,16 @@ function tagsChange(change: FieldChange): string {
   return parts.length > 0 ? joinList(parts) : 'changed the tags';
 }
 
+/** A change of the task's blockers (task dependencies): refs added and removed. */
+function blockersChange(change: FieldChange): string {
+  const parts: string[] = [];
+  const added = change.added ?? [];
+  const removed = change.removed ?? [];
+  if (added.length > 0) parts.push(`made it wait on ${added.join(', ')}`);
+  if (removed.length > 0) parts.push(`removed the link to ${removed.join(', ')}`);
+  return parts.length > 0 ? joinList(parts) : 'changed what it waits on';
+}
+
 function fieldWords(field: string): string {
   return field.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
 }
@@ -155,6 +165,8 @@ export function changePhrase(change: FieldChange, lookups: ActivityTextLookups =
       return valueChange('estimate', change, (v) => formatEstimate(Number(v), unit));
     case 'tags':
       return tagsChange(change);
+    case 'blockedBy':
+      return blockersChange(change);
     case 'archived':
       return change.to === true ? `archived the ${subject}` : `restored the ${subject} from the archive`;
     default:
@@ -210,7 +222,9 @@ export function activityPhrases(entry: ActivityDTO, lookups: ActivityTextLookups
     }
     case 'task.updated': {
       const changes = changesOf(entry);
-      return changes.length > 0 ? changes.map((c) => changePhrase(c, lookups, 'task')) : ['updated the task'];
+      // A rebaseline accepted the slip its blockers caused (task dependencies): say so on its date changes.
+      const suffix = data.rebaseline === true ? ' (rebaseline)' : '';
+      return changes.length > 0 ? changes.map((c) => changePhrase(c, lookups, 'task') + suffix) : ['updated the task'];
     }
     case 'task.moved': {
       const projectName = (name: unknown, id: unknown): string | null => {

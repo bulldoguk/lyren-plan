@@ -16,6 +16,7 @@ import {
   tagPatch,
   taskIsClosed,
 } from '../../components/domain';
+import { formatDate } from '../../lib/format';
 import { useIsMobile } from '../../lib/hooks';
 import type { SaveOptions } from './useTaskSave';
 import { ignoreRejection } from './useTaskSave';
@@ -93,6 +94,14 @@ export function TaskProperties({ task, save, readOnly = false }: TaskPropertiesP
           triggerProps={fullWidth}
         />
       </Row>
+      {task.slipDays > 0 && !closed && (
+        <Row label="Adjusted due">
+          {/* Its blockers push it later (task dependencies): the date lists go by, and the slip. */}
+          <span className="flex min-h-8 items-center px-2 text-sm text-warning" title="Worked out from when its blockers finish">
+            {formatDate(task.adjustedDueDate)} · +{task.slipDays}d
+          </span>
+        </Row>
+      )}
       <Row label="Estimate">
         <EstimatePicker value={task.estimate} onChange={(estimate) => run({ estimate })} triggerProps={fullWidth} />
       </Row>
