@@ -25,6 +25,9 @@ report it instead.
   status (user-configurable statuses with fixed categories), priority (none/low/medium/high/urgent),
   tags, start date, due date, estimate (points or hours — a setting), manual order, archive flag.
   Human refs: `LYR-42`.
+- Task dependencies (docs/design/task-dependencies.md): finish-to-start links between tasks of a space, the
+  adjusted start and due dates they imply (worked out when read, against the client's `today`), slipped tasks,
+  and rebaselining a project's or a selection's slipped tasks.
 - Tags: global, colored, rename/recolor/merge/delete; created inline while tagging.
 - Comments on tasks (Markdown, edit/delete own).
 - Work log on tasks ("log activity"): date, time spent (e.g. `1h 30m`), note. Work-log report page.
@@ -381,6 +384,12 @@ make the smallest possible fix, keep exported signatures backwards compatible, a
 - Duplicate: same fields/tags/epic, title + ` (copy)`, status kept unless closed (then default status),
   `completedAt` NULL, not archived, placed right after the original. Activity `task.created` with
   `data.duplicatedFrom = <ref>`.
+- Links (docs/design/task-dependencies.md): `task_links (blocker_id, blocked_id)`, finish-to-start, within the space,
+  no cycles (400 path `blockerId`), removed with either task. TaskDTO carries `blockedBy`, `blocks`,
+  `adjustedStartDate`, `adjustedDueDate` and `slipDays`, worked out when read (`services/schedule.ts`, the rules in
+  `shared/src/schedule.ts`); nothing derived is stored. A link change logs `task.updated` on the blocked task with
+  `{ field: 'blockedBy', added, removed }` (refs); deleting a blocker logs that on each task it blocked. A
+  rebaseline logs its date changes with `data.rebaseline: true`.
 - Bulk update/delete: all-or-nothing transaction; unknown ids → 400 listing them; one activity entry per task.
   Bulk `epicId` must belong to each task's project (400 listing offenders); bulk never moves projects.
 
@@ -466,7 +475,7 @@ then each row through `parseBounded` (`exportRowSchemas`, `archiveRowSchemas`, `
 50 problems — 400 listing them, nothing changed. Then referential integrity (400 listing the first 50 of all
 problems): unique ids per table, unique project keys / tag names / status names (case-insensitive); milestone/epic/
 task `projectId` exist; epic `milestoneId` in the same project; task `statusId` exists; task `epicId` in the same
-project; task `tagIds` exist; comment/worklog `taskId` exist; activity `taskId`/`projectId` exist or are null (drop
+project; task `tagIds` exist; task `blockedBy` (v2, optional) are other tasks of the file and do not loop; comment/worklog `taskId` exist; activity `taskId`/`projectId` exist or are null (drop
 entries that dangle); `settings.defaultBoardId` exists else becomes null; board `projectId` exists or null;
 `startDate <= dueDate` for tasks/milestones/epics (path `<table>.<i>.dueDate`) and work logs with minutes>0 or a
 non-blank note (path `worklogs.<i>.note`); for v2 also `users` ids unique, a placeholder's id negative and an
@@ -622,10 +631,12 @@ are in docs/design/multi-user-and-cloudflare.md §7.2.
 | POST `/api/epics/reorder` | `ReorderInput` (all of one project) | `{ ok }` |
 | POST `/api/tasks/query` | `TaskQueryInput` | `TaskQueryResult` |
 | POST `/api/tasks` | `TaskCreateInput` | 201 `TaskDTO` |
-| GET `/api/tasks/:id` · GET `/api/tasks/ref/:ref` | – | `TaskDTO` |
+| GET `/api/tasks/:id?today=` · GET `/api/tasks/ref/:ref?today=` | – | `TaskDTO` |
 | PATCH `/api/tasks/:id` | `TaskUpdateInput` | `TaskDTO` |
 | DELETE `/api/tasks/:id` | – | `{ ok }` |
 | POST `/api/tasks/:id/duplicate` | – | 201 `TaskDTO` |
+| POST `/api/tasks/:id/blockers` · DELETE `/api/tasks/:id/blockers/:blockerId` | `TaskLinkInput` · – | `TaskDTO` (the blocked task; design task-dependencies §6) |
+| POST `/api/tasks/rebaseline/preview` · POST `/api/tasks/rebaseline` | `RebaselineInput` (`projectId` or `ids`, `today`) | `{ items: RebaselineItemDTO[] }` |
 | POST `/api/tasks/bulk` | `TaskBulkUpdateInput` | `{ tasks: TaskDTO[] }` |
 | POST `/api/tasks/bulk-delete` | `TaskBulkDeleteInput` | `{ deleted }` |
 | GET `/api/tasks/:id/timeline` | – | `TaskTimelineDTO` (each list oldest first) |
@@ -642,7 +653,7 @@ are in docs/design/multi-user-and-cloudflare.md §7.2.
 | POST `/api/data/import/analyze?mode=new\|replace` | multipart `file` | `ImportAnalysisDTO` (§5.10; owner, re-auth for `replace`; `new` only while the space is `importing`) |
 | POST `/api/data/import/commit?mode=new\|replace` | multipart `file`, `mapping` (JSON `ImportMappingInput`) | `ImportResultDTO` (§5.10; 409 `quota_exceeded` over `IMPORT_MAX_ROW_WRITES`, 429 past the day's import budget) |
 | POST `/api/people/:personId/reassign` · POST `/api/people/me/disown` | `PeopleReassignInput` · – | `PeopleReassignedDTO` (admins and owners) · `PeopleDisownedDTO` (anyone) |
-| GET `/api/dashboard?today=&weekStartsOn=` | – | `DashboardDTO` (lists capped at 50 / 20; `counts` = uncapped totals per list, `inProgressProjects` = distinct projects with started tasks; `worklog` = the viewer's own time) |
+| GET `/api/dashboard?today=&weekStartsOn=` | – | `DashboardDTO` (lists capped at 50 / 20; `counts` = uncapped totals per list, `inProgressProjects` = distinct projects with started tasks; `slipped` = open slipped tasks; `worklog` = the viewer's own time) |
 | GET `/api/search?q&limit` | `SearchQueryInput` | `SearchResultDTO` (tasks of every project, archived tasks included and ranked after live ones at equal relevance) |
 
 The instance backup is the directory's `GET /api/admin/backup` (design §9.5); the space app has no backup route.
@@ -653,7 +664,9 @@ Boards: `projectId` is immutable (create only). For project boards the server fo
 ### Filter semantics (`TaskFilter`, implemented by `matchesTaskFilter` in shared/src/filter.ts)
 All present criteria are ANDed; within an array values are ORed; **an omitted or empty array means "no
 constraint"**. `ids` restricts the result to those tasks (the palette refreshes its Recent list with it).
-`null` inside `milestoneIds`/`epicIds`/`tagIds` means "has none". `tagMode: 'all'` requires
+`null` inside `milestoneIds`/`epicIds`/`tagIds` means "has none". The due criteria and the `dueDate` sort go by
+`effectiveDueDate`: a slipped task's adjusted due date, else its own (the SQL passes the slipped tasks' dates as
+`:slips`); `slipped: true` keeps the slipped tasks only. `tagMode: 'all'` requires
 every listed (non-null) tag (only `[null]` → untagged). `due` presets are ORed and resolved against the
 request's `today`/`weekStartsOn` (`overdue` excludes closed tasks). `search`: every whitespace token must
 appear (case-insensitive) in title, description or ref. `archived`: default `exclude`. `closedWithinDays`:
