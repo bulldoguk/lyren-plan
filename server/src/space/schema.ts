@@ -2,7 +2,8 @@
 // by the space id on Cloudflare. Today's domain schema (db/schema.ts V1) without sessions, with a
 // users mirror in place of the accounts (§3.5), fold columns for case-insensitive uniqueness and
 // search (§3.4), import provenance on comments, work logs and activity (§8.6), and _meta (§3.7);
-// migration 2 adds tasks.tag_ids, migration 3 tasks.comment_count and tasks.worklog_minutes. Every other
+// migration 2 adds tasks.tag_ids, migration 3 tasks.comment_count and tasks.worklog_minutes, migration 4
+// task_links. Every other
 // table and column is exactly as in db/schema.ts V1, so the route and service SQL keeps working. Append new migrations to SPACE_MIGRATIONS and never edit
 // one that has shipped.
 //
@@ -286,10 +287,28 @@ CREATE TRIGGER work_logs_updated AFTER UPDATE OF task_id, minutes ON work_logs
 END;
 `;
 
+/**
+ * Migration 4 (docs/design/task-dependencies.md): finish-to-start links between tasks. A link's blocked task
+ * can't finish on time until its blocker has finished; the adjusted dates this implies are worked out when tasks
+ * are read (services/schedule.ts), so nothing else is stored. Deleting either task deletes the link. An older
+ * build never reads the table and its deletes cascade into it, so this is compatible from 1.
+ */
+export const SPACE_V4 = /* sql */ `
+CREATE TABLE task_links (
+  blocker_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  blocked_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (blocker_id, blocked_id),
+  CHECK (blocker_id <> blocked_id)
+) WITHOUT ROWID;
+CREATE INDEX task_links_blocked ON task_links(blocked_id);
+`;
+
 const MIGRATIONS: ReadonlyArray<Migration> = [
   { up: (db) => db.exec(SPACE_V1) },
   { up: (db) => db.exec(SPACE_V2), compatibleFrom: 1 },
   { up: (db) => db.exec(SPACE_V3), compatibleFrom: 1 },
+  { up: (db) => db.exec(SPACE_V4), compatibleFrom: 1 },
 ];
 
 export const SPACE_MIGRATIONS: MigrationSet = { schema: 'space', migrations: MIGRATIONS };

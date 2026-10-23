@@ -14,6 +14,7 @@ import type { Db, SqlValue } from '../db';
 import { notFound } from '../http/errors';
 import { compareTagNames, toTagRef } from './mappers';
 import type { TaskRow } from './rows';
+import { linkFields, readSchedule, slips, type Schedule } from './schedule';
 import { byJsonIds, CLOSED_CATEGORIES_SQL, jsonList, serverToday } from './sql';
 
 /**
@@ -75,12 +76,24 @@ export function tagIdsOf(row: Pick<TaskRow, 'tag_ids'>): number[] {
 }
 
 /**
- * Rows -> TaskDTOs, preserving input order. Batched: three queries at most for any number of rows (project
- * keys, epic milestones, tag names), each reading its rows by id. The tags come from the rows' tag_ids and
- * the counts from the rows themselves, so no task_tags, comment or work-log row is read.
+ * How a read gets the links and adjusted dates (services/schedule.ts): a schedule already read, or the date
+ * to read one for (default the server's UTC date).
  */
-export function hydrateTasks(db: Db, rows: readonly TaskRow[]): TaskDTO[] {
+export type ScheduleSource = Schedule | ISODate | undefined;
+
+function scheduleOf(db: Db, source: ScheduleSource): Schedule {
+  return typeof source === 'object' ? source : readSchedule(db, source ?? serverToday());
+}
+
+/**
+ * Rows -> TaskDTOs, preserving input order. Batched: three queries at most for any number of rows (project
+ * keys, epic milestones, tag names), each reading its rows by id, plus the space's links (services/schedule.ts)
+ * unless `schedule` is one already read. The tags come from the rows' tag_ids and the counts from the rows
+ * themselves, so no task_tags, comment or work-log row is read.
+ */
+export function hydrateTasks(db: Db, rows: readonly TaskRow[], schedule?: ScheduleSource): TaskDTO[] {
   if (rows.length === 0) return [];
+  const links = scheduleOf(db, schedule);
   const keys = new Map(
     db
       .all<{ id: number; key: string }>(`SELECT p.id, p.key FROM ${byJsonIds('projects', 'p', 'ids')}`, {
@@ -139,25 +152,26 @@ export function hydrateTasks(db: Db, rows: readonly TaskRow[]): TaskDTO[] {
       tags,
       commentCount: r.comment_count,
       worklogMinutes: r.worklog_minutes,
+      ...linkFields(links, r),
     };
   });
 }
 
 /** One task as DTO, or 404. */
-export function getTaskDTO(db: Db, id: number): TaskDTO {
+export function getTaskDTO(db: Db, id: number, schedule?: ScheduleSource): TaskDTO {
   const row = db.get<TaskRow>(`SELECT ${TASK_COLUMNS} FROM ${TASK_FROM} WHERE t.id = :id`, { id });
   if (!row) throw notFound('Task');
-  return hydrateTasks(db, [row])[0]!;
+  return hydrateTasks(db, [row], schedule)[0]!;
 }
 
 /** Tasks by id as DTOs in the order of `ids` (unknown ids are skipped). */
-export function getTaskDTOs(db: Db, ids: readonly number[]): TaskDTO[] {
+export function getTaskDTOs(db: Db, ids: readonly number[], schedule?: ScheduleSource): TaskDTO[] {
   if (ids.length === 0) return [];
   const rows = new Map(
     db.all<TaskRow>(`SELECT ${TASK_COLUMNS} FROM ${byJsonIds('tasks', 't', 'ids')}`, { ids: jsonList(ids) }).map((r) => [r.id, r]),
   );
   const ordered = [...new Set(ids)].map((id) => rows.get(id)).filter((r): r is TaskRow => r !== undefined);
-  return hydrateTasks(db, ordered);
+  return hydrateTasks(db, ordered, schedule);
 }
 
 /** Current ref ('KEY-42') of a task row — for activity snapshots such as `{ title, ref }`. */
@@ -178,14 +192,14 @@ export function parseTaskRef(ref: string): { key: string; number: number } | nul
 }
 
 /** Task by human ref ('WEB-3', case-insensitive), or null. */
-export function findTaskByRef(db: Db, ref: string): TaskDTO | null {
+export function findTaskByRef(db: Db, ref: string, schedule?: ScheduleSource): TaskDTO | null {
   const parsed = parseTaskRef(ref);
   if (!parsed) return null;
   const row = db.get<TaskRow>(
     `SELECT ${TASK_COLUMNS} FROM ${TASK_FROM} JOIN projects p ON p.id = t.project_id WHERE p.key = :key AND t.number = :number`,
     parsed,
   );
-  return row ? hydrateTasks(db, [row])[0]! : null;
+  return row ? hydrateTasks(db, [row], schedule)[0]! : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +212,25 @@ export interface TaskWhereContext {
   weekStartsOn: WeekStart;
   /** Epoch ms for closedWithinDays. */
   nowMs: number;
+  /**
+   * The slipped tasks' adjusted due dates (services/schedule.ts#slips), which replace their due date in the due
+   * filters and sorting (effectiveDueDate). None given: every task's own.
+   */
+  slips?: ReadonlyMap<number, ISODate>;
+}
+
+/**
+ * SQL expression for a task's due date as filters and sorting see it (effectiveDueDate): t.due_date, or the
+ * adjusted due date of a slipped task, looked up in the JSON object bound to :slips (slipsParam). Plain
+ * t.due_date when nothing slipped, which keeps the due-date index usable.
+ */
+export function dueDateSql(slipped: ReadonlyMap<number, ISODate> | undefined): string {
+  return slipped && slipped.size > 0 ? `COALESCE(json_extract(:slips, '$."' || t.id || '"'), t.due_date)` : 't.due_date';
+}
+
+/** The :slips parameter dueDateSql and the slipped filter read (an empty object when nothing slipped). */
+export function slipsParam(slipped: ReadonlyMap<number, ISODate> | undefined): { slips: string } {
+  return { slips: JSON.stringify(Object.fromEntries(slipped ?? [])) };
 }
 
 export interface SqlFragment {
@@ -285,20 +318,21 @@ export function buildTaskWhere(filter: TaskFilter, ctx: TaskWhereContext): SqlFr
   }
   if (nonEmpty(filter.excludeTagIds)) clauses.push(`NOT ${tagged(filter.excludeTagIds)}`);
 
+  const due = dueDateSql(ctx.slips);
   if (nonEmpty(filter.due)) {
     const parts = [...new Set(filter.due)].map((preset) => {
       const r = resolveDuePreset(preset, ctx.today, ctx.weekStartsOn);
       switch (r.kind) {
         case 'overdue':
-          return `(t.due_date < ${param(r.before)} AND ${open})`;
+          return `(${due} < ${param(r.before)} AND ${open})`;
         case 'none':
-          return 't.due_date IS NULL';
+          return `${due} IS NULL`;
         case 'any':
-          return 't.due_date IS NOT NULL';
+          return `${due} IS NOT NULL`;
         case 'range': {
-          const range = ['t.due_date IS NOT NULL'];
-          if (r.from !== null) range.push(`t.due_date >= ${param(r.from)}`);
-          if (r.to !== null) range.push(`t.due_date <= ${param(r.to)}`);
+          const range = [`${due} IS NOT NULL`];
+          if (r.from !== null) range.push(`${due} >= ${param(r.from)}`);
+          if (r.to !== null) range.push(`${due} <= ${param(r.to)}`);
           return `(${range.join(' AND ')})`;
         }
       }
@@ -306,9 +340,13 @@ export function buildTaskWhere(filter: TaskFilter, ctx: TaskWhereContext): SqlFr
     clauses.push(anyOf(parts));
   }
   if (filter.dueFrom || filter.dueTo) {
-    clauses.push('t.due_date IS NOT NULL');
-    if (filter.dueFrom) clauses.push(`t.due_date >= ${param(filter.dueFrom)}`);
-    if (filter.dueTo) clauses.push(`t.due_date <= ${param(filter.dueTo)}`);
+    clauses.push(`${due} IS NOT NULL`);
+    if (filter.dueFrom) clauses.push(`${due} >= ${param(filter.dueFrom)}`);
+    if (filter.dueTo) clauses.push(`${due} <= ${param(filter.dueTo)}`);
+  }
+
+  if (filter.slipped) {
+    clauses.push(ctx.slips && ctx.slips.size > 0 ? 't.id IN (SELECT CAST(key AS INTEGER) FROM json_each(:slips))' : '0');
   }
 
   // The JS reference's haystack is `${title}\n${description}\n${ref}`, lower-cased; here the stored folds
@@ -351,7 +389,7 @@ export function buildTaskWhere(filter: TaskFilter, ctx: TaskWhereContext): SqlFr
  * Known edge: titles compare as UTF-8 bytes in SQLite but UTF-16 code units in JS, which
  * only differ for supplementary-plane characters vs U+E000–U+FFFF at the same position.
  */
-export function taskOrderBy(sort: TaskSort): string {
+export function taskOrderBy(sort: TaskSort, slipped?: ReadonlyMap<number, ISODate>): string {
   const dir = sort.dir === 'desc' ? 'DESC' : 'ASC';
   const tie = 't.rank ASC, t.id ASC';
   switch (sort.field) {
@@ -359,8 +397,10 @@ export function taskOrderBy(sort: TaskSort): string {
       return `t.rank ${dir}, t.id ${dir}`;
     case 'priority':
       return `t.priority = 0, t.priority ${dir}, ${tie}`;
-    case 'dueDate':
-      return `t.due_date IS NULL, t.due_date ${dir}, ${tie}`;
+    case 'dueDate': {
+      const due = dueDateSql(slipped);
+      return `${due} IS NULL, ${due} ${dir}, ${tie}`;
+    }
     case 'startDate':
       return `t.start_date IS NULL, t.start_date ${dir}, ${tie}`;
     case 'estimate':
@@ -414,32 +454,39 @@ export const TASK_PAGE_MAX = 500;
  * space), the page costs about one row more per task shown than reading it directly would.
  */
 export function queryTasks(db: Db, input: TaskQueryInput = {}, opts: TaskQueryOptions = {}): TaskQueryResult {
+  const today = input.today ?? opts.today ?? serverToday();
+  const schedule = readSchedule(db, today);
+  const slipped = slips(schedule);
   const ctx: TaskWhereContext = {
-    today: input.today ?? opts.today ?? serverToday(),
+    today,
     weekStartsOn: input.weekStartsOn ?? opts.weekStartsOn ?? 1,
     nowMs: opts.nowMs ?? Date.now(),
+    slips: slipped,
   };
   const where = buildTaskWhere(input.filter ?? {}, ctx);
   const limit = Math.min(Math.max(1, input.limit ?? LIMITS.queryLimitDefault), LIMITS.queryLimitMax);
   const offset = Math.max(0, input.offset ?? 0);
   const sort = input.sort ?? DEFAULT_TASK_SORT;
-  const params = { ...where.params, ...(sort.field === 'status' ? { statusPositions: statusPositions(db) } : {}) };
+  const orderBy = taskOrderBy(sort, slipped);
+  // Extra named parameters are ignored, so :slips goes with every statement (dueDateSql, the slipped filter).
+  const whereParams = { ...where.params, ...slipsParam(slipped) };
+  const params = { ...whereParams, ...(sort.field === 'status' ? { statusPositions: statusPositions(db) } : {}) };
   if (limit <= TASK_PAGE_MAX) {
     const ids = db
-      .all<{ id: number }>(`SELECT t.id FROM ${TASK_FROM} WHERE ${where.sql} ORDER BY ${taskOrderBy(sort)}`, params)
+      .all<{ id: number }>(`SELECT t.id FROM ${TASK_FROM} WHERE ${where.sql} ORDER BY ${orderBy}`, params)
       .map((r) => r.id);
-    return { tasks: getTaskDTOs(db, ids.slice(offset, offset + limit)), total: ids.length };
+    return { tasks: getTaskDTOs(db, ids.slice(offset, offset + limit), schedule), total: ids.length };
   }
   const rows = db.all<TaskRow>(
     `SELECT ${TASK_COLUMNS} FROM ${TASK_FROM}
       WHERE ${where.sql}
-      ORDER BY ${taskOrderBy(sort)}
+      ORDER BY ${orderBy}
       LIMIT :limit OFFSET :offset`,
     { ...params, limit, offset },
   );
   const complete = rows.length < limit && (offset === 0 || rows.length > 0);
   const total = complete
     ? offset + rows.length
-    : db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM ${TASK_FROM} WHERE ${where.sql}`, where.params)!.n;
-  return { tasks: hydrateTasks(db, rows), total };
+    : db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM ${TASK_FROM} WHERE ${where.sql}`, whereParams)!.n;
+  return { tasks: hydrateTasks(db, rows, schedule), total };
 }

@@ -40,7 +40,12 @@ const SEARCHES = [
 
 interface World {
   db: Db;
+  /** The tasks as of the server's date. */
   tasks: TaskDTO[];
+  /** The tasks as of `today`: their adjusted dates depend on it (task dependencies). */
+  at: (today: string) => TaskDTO[];
+  /** Draws the slipped criterion of randomFilter. */
+  slipRnd: ReturnType<typeof prng>;
   statuses: StatusRow[];
   projects: Array<{ id: number; status: 'active' | 'on_hold' | 'completed' | 'archived' }>;
   projectIds: number[];
@@ -127,11 +132,26 @@ function buildWorld({ db }: SpaceDb): World {
     });
   }
 
+  // Task dependencies: links from lower to higher ids (so they never loop), some of them in chains, so the
+  // adjusted due dates (and the slipped filter) are exercised against the reference too.
+  for (let i = 0; i < 80; i++) {
+    const [a, b] = [rnd.pick(ids), rnd.pick(ids)].sort((x, y) => x - y);
+    if (a === b) continue;
+    db.run('INSERT OR IGNORE INTO task_links (blocker_id, blocked_id, created_at) VALUES (:a, :b, :t)', { a, b, t: timestamps[0]! });
+  }
+
   const rows = db.all<TaskRow>('SELECT * FROM tasks ORDER BY id');
+  const byDay = new Map<string, TaskDTO[]>();
+  const at = (today: string): TaskDTO[] => {
+    if (!byDay.has(today)) byDay.set(today, hydrateTasks(db, rows, today));
+    return byDay.get(today)!;
+  };
   const projects = db.all<{ id: number; status: World['projects'][number]['status'] }>('SELECT id, status FROM projects');
   return {
     db,
     tasks: hydrateTasks(db, rows),
+    at,
+    slipRnd: prng(4242),
     statuses,
     projects,
     projectIds,
@@ -173,6 +193,8 @@ function randomFilter(rnd: ReturnType<typeof prng>, w: World): TaskFilter {
   if (rnd.chance(0.45)) f.archived = rnd.pick(['exclude', 'include', 'only'] as const);
   if (rnd.chance(0.35)) f.closedWithinDays = rnd.pick([null, 0, 1, 7, 14, 30, 90]);
   if (rnd.chance(0.3)) f.includeArchivedProjects = rnd.chance(0.6);
+  // From a generator of its own, so the other criteria draw the same values as before links existed.
+  if (w.slipRnd.chance(0.15)) f.slipped = w.slipRnd.chance(0.8);
   return f;
 }
 
@@ -191,6 +213,7 @@ export function defineFilterContract(kind: string, withSpaceDb: WithSpaceDb): vo
         expect(w.tasks).toHaveLength(220);
         expect(w.tasks.some((t) => t.tags.length > 1)).toBe(true);
         expect(w.tasks.some((t) => t.milestoneId !== null)).toBe(true);
+        expect(w.at(TODAYS[0]!).filter((t) => t.slipDays > 0).length).toBeGreaterThan(5);
       }));
 
     it('selects the same set for 600 random filters', () =>
@@ -203,7 +226,7 @@ export function defineFilterContract(kind: string, withSpaceDb: WithSpaceDb): vo
           const today = rnd.pick(TODAYS);
           const weekStartsOn = rnd.pick([0, 1] as const);
           const { fctx } = contexts(w, today, weekStartsOn);
-          const expected = w.tasks.filter((t) => matchesTaskFilter(t, filter, fctx)).map((t) => t.id).sort((a, b) => a - b);
+          const expected = w.at(today).filter((t) => matchesTaskFilter(t, filter, fctx)).map((t) => t.id).sort((a, b) => a - b);
           const result = queryTasks(w.db, { filter, today, weekStartsOn, limit: 5000 }, { nowMs: NOW_MS });
           const actual = result.tasks.map((t) => t.id).sort((a, b) => a - b);
           if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -257,12 +280,15 @@ export function defineFilterContract(kind: string, withSpaceDb: WithSpaceDb): vo
           { search: 'σίσυφος' },
           { search: 'ς' },
           { search: 'web-1' },
+          { slipped: true },
+          { slipped: false },
+          { slipped: true, due: ['overdue'] },
         ];
         for (const today of TODAYS) {
           for (const weekStartsOn of [0, 1] as const) {
             const { fctx } = contexts(w, today, weekStartsOn);
             for (const filter of filters) {
-              const expected = w.tasks.filter((t) => matchesTaskFilter(t, filter, fctx)).map((t) => t.id);
+              const expected = w.at(today).filter((t) => matchesTaskFilter(t, filter, fctx)).map((t) => t.id);
               const actual = queryTasks(w.db, { filter, today, weekStartsOn, limit: 5000 }, { nowMs: NOW_MS }).tasks.map(
                 (t) => t.id,
               );
@@ -298,7 +324,8 @@ export function defineFilterContract(kind: string, withSpaceDb: WithSpaceDb): vo
           const today = rnd.pick(TODAYS);
           const weekStartsOn = rnd.pick([0, 1] as const);
           const { fctx } = contexts(w, today, weekStartsOn);
-          const expected = w.tasks
+          const expected = w
+            .at(today)
             .filter((t) => matchesTaskFilter(t, filter, fctx))
             .sort((a, b) => compareTasks(a, b, sort, sctx))
             .map((t) => t.id);

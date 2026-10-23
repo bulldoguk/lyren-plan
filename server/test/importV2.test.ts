@@ -33,7 +33,7 @@ function withLimits(vars: Record<string, string>): TestContext {
   return createTestContext();
 }
 
-const SPACE_TABLES = ['statuses', 'tags', 'projects', 'milestones', 'epics', 'tasks', 'task_tags', 'comments', 'work_logs', 'activity', 'boards'];
+const SPACE_TABLES = ['statuses', 'tags', 'projects', 'milestones', 'epics', 'tasks', 'task_tags', 'task_links', 'comments', 'work_logs', 'activity', 'boards'];
 
 /**
  * Every row of a space's content, every column (the import's own timestamps aside: statuses carry none in an
@@ -42,10 +42,11 @@ const SPACE_TABLES = ['statuses', 'tags', 'projects', 'milestones', 'epics', 'ta
 function dump(db: Db, o: { users?: boolean; importTimes?: boolean } = {}) {
   const out: Record<string, unknown[]> = {};
   for (const table of SPACE_TABLES) {
-    const order = table === 'task_tags' ? 'task_id, tag_id' : 'id';
+    const order = table === 'task_tags' ? 'task_id, tag_id' : table === 'task_links' ? 'blocked_id, blocker_id' : 'id';
     out[table] = db.all<Record<string, unknown>>(`SELECT * FROM ${table} ORDER BY ${order}`).map((row) => {
       const copy = { ...row };
-      if (table === 'statuses') {
+      // Neither carries its times in an archive (a link's is when the import wrote it).
+      if (table === 'statuses' || table === 'task_links') {
         delete copy.created_at;
         delete copy.updated_at;
       }
@@ -71,6 +72,9 @@ async function richSource(ctx: TestContext) {
   const dave = await ctx.addUser({ email: 'dave@example.com', displayName: 'Dave' });
   const tasks = (await owner.client.post<{ tasks: TaskDTO[] }>('/api/tasks/query', { limit: 5000 })).body.tasks;
   const project = tasks[0]!.projectId;
+  // Task dependencies: a chain of two links.
+  expect((await owner.client.post(`/api/tasks/${tasks[3]!.id}/blockers`, { blockerId: tasks[0]!.id })).status).toBe(200);
+  expect((await owner.client.post(`/api/tasks/${tasks[4]!.id}/blockers`, { blockerId: tasks[3]!.id })).status).toBe(200);
   for (const [who, client] of [
     ['Bob', bob.client],
     ['Carol', carol.client],

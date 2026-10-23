@@ -23,6 +23,7 @@ import { readQuery } from '../http/validate';
 import { listActivity } from '../services/activity';
 import type { TaskRow } from '../services/rows';
 import { compareText, serverToday } from '../services/sql';
+import { readSchedule, slips } from '../services/schedule';
 import { getTaskDTOs, type TaskWhereContext } from '../services/tasks';
 import { currentUser } from '../space/context';
 
@@ -61,7 +62,7 @@ const compareNullableText = (a: string | null, b: string | null): number =>
 const byPriority: Order = (a, b) =>
   Number(a.priority === 0) - Number(b.priority === 0) || b.priority - a.priority || compareText(a.rank, b.rank) || a.id - b.id;
 const ORDER = {
-  /** t.due_date ASC, then by priority */
+  /** t.due_date ASC (a slipped task's adjusted one, which its scanned row carries), then by priority */
   overdue: (a, b) => compareNullableText(a.due_date, b.due_date) || byPriority(a, b),
   dueToday: byPriority,
   dueSoon: (a, b) => compareNullableText(a.due_date, b.due_date) || byPriority(a, b),
@@ -175,8 +176,11 @@ export function buildDashboard(db: Db, ctx: TaskWhereContext, userId: number): D
   const { today, weekStartsOn } = ctx;
   const { list } = DASHBOARD_LIMITS;
   const filters = dashboardFilters(today);
+  const schedule = readSchedule(db, today);
+  const slipped = slips(schedule);
   const scope: DashboardScope = {
     ...ctx,
+    slips: slipped,
     categoryOf: new Map(
       db.all<{ id: number; category: StatusCategory }>('SELECT id, category FROM statuses').map((s) => [s.id, s.category]),
     ),
@@ -184,7 +188,12 @@ export function buildDashboard(db: Db, ctx: TaskWhereContext, userId: number): D
       db.all<{ id: number; status: ProjectStatus }>('SELECT id, status FROM projects').map((p) => [p.id, p.status]),
     ),
   };
-  const tasks = db.all<DashboardTask>(`SELECT ${DASHBOARD_COLUMNS} FROM tasks`);
+  // A slipped task goes by its adjusted due date (effectiveDueDate, buildTaskWhere's dueDateSql): its scanned
+  // row carries that as due_date, so the sections' filters and orders read it.
+  const tasks = db
+    .all<DashboardTask>(`SELECT ${DASHBOARD_COLUMNS} FROM tasks`)
+    .map((t) => (slipped.has(t.id) ? { ...t, due_date: slipped.get(t.id)! } : t));
+  const slippedOpen = tasks.filter((t) => slipped.has(t.id) && matchesSection(t, { statusCategories: OPEN_CATEGORIES }, scope)).length;
   const overdue = section(tasks, filters.overdue, scope, ORDER.overdue, list);
   const dueToday = section(tasks, filters.dueToday, scope, ORDER.dueToday, list);
   const dueSoon = section(tasks, filters.dueSoon, scope, ORDER.dueSoon, list);
@@ -192,7 +201,7 @@ export function buildDashboard(db: Db, ctx: TaskWhereContext, userId: number): D
   const recentlyClosed = section(tasks, filters.recentlyClosed, scope, ORDER.recentlyClosed, DASHBOARD_LIMITS.recentlyClosed);
   // Only the listed tasks are read in full, together.
   const sections = [overdue, dueToday, dueSoon, inProgress, recentlyClosed];
-  const dtos = new Map(getTaskDTOs(db, sections.flatMap((s) => s.ids)).map((t) => [t.id, t]));
+  const dtos = new Map(getTaskDTOs(db, sections.flatMap((s) => s.ids), schedule).map((t) => [t.id, t]));
   const listed = (s: { ids: number[] }): TaskDTO[] => s.ids.map((id) => dtos.get(id)!);
   return {
     today,
@@ -209,6 +218,7 @@ export function buildDashboard(db: Db, ctx: TaskWhereContext, userId: number): D
       recentlyClosed: recentlyClosed.total.tasks,
     },
     inProgressProjects: inProgress.total.projects,
+    slipped: slippedOpen,
     recentActivity: listActivity(db, { limit: DASHBOARD_LIMITS.recentActivity }).items,
     worklog: worklogTotals(db, today, weekStartsOn, userId),
   };

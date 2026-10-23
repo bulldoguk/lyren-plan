@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Db } from '../../src/core/db';
 import { migrate, readSchemaState, withDeferredForeignKeys, type Migration, type MigrationSet } from '../../src/core/migrate';
 import { DIRECTORY_MIGRATIONS, DIRECTORY_V1 } from '../../src/directory/schema';
-import { SPACE_MIGRATIONS, SPACE_V1 } from '../../src/space/schema';
+import { SPACE_MIGRATIONS, SPACE_V1, SPACE_V4 } from '../../src/space/schema';
 
 export type WithDb = <T>(body: (db: Db) => T) => Promise<T>;
 
@@ -662,10 +662,11 @@ export function defineDbContract(kind: Db['kind'], withDb: WithDb, options: DbCo
         },
         {
           set: SPACE_MIGRATIONS,
-          ddl: SPACE_V1,
+          // Migration 4 adds task_links (task dependencies).
+          ddl: SPACE_V1 + SPACE_V4,
           tables: [
             '_meta', 'activity', 'boards', 'comments', 'epics', 'milestones', 'projects', 'settings', 'statuses', 'tags',
-            'task_tags', 'tasks', 'users', 'work_logs',
+            'task_links', 'task_tags', 'tasks', 'users', 'work_logs',
           ],
           // Migration 2: tasks.tag_ids and the triggers that keep it (Appendix D 42); migration 3: the comment
           // counts and logged minutes (Appendix D 46).
@@ -836,7 +837,10 @@ export function defineDbContract(kind: Db['kind'], withDb: WithDb, options: DbCo
               (r) => [r.comment_count, r.worklog_minutes],
             );
 
-          expect(migrate(db, SPACE_MIGRATIONS, { appVersion: '2.0.1' })).toEqual({ from: 2, to: 3 });
+          expect(migrate(db, { schema: 'space', migrations: SPACE_MIGRATIONS.migrations.slice(0, 3) }, { appVersion: '2.0.1' })).toEqual({
+            from: 2,
+            to: 3,
+          });
           expect(meta(db)).toMatchObject({ version: '3', compatible_from: '1' });
           expect(counts()).toEqual([[2, 30], [1, 15], [0, 0]]);
           // Every change of comments and work logs, whatever writes it.
@@ -858,6 +862,32 @@ export function defineDbContract(kind: Db['kind'], withDb: WithDb, options: DbCo
             from: 3,
             to: 3,
           });
+        }));
+
+      it('space migration 4: a database of migration 3 gets task_links, which its tasks\' deletes clear', () =>
+        withDb((db) => {
+          migrate(db, { schema: 'space', migrations: SPACE_MIGRATIONS.migrations.slice(0, 3) }, { appVersion: '2.0.0' });
+          const t = { t: T0 };
+          db.run(
+            "INSERT INTO projects (id, key, name, name_fold, description, description_fold, color, created_at, updated_at) VALUES (1, 'WEB', 'Web', 'web', '', '', '#6366f1', :t, :t)",
+            t,
+          );
+          db.run("INSERT INTO statuses (id, name, name_fold, category, color, created_at, updated_at) VALUES (1, 'Todo', 'todo', 'unstarted', '#64748b', :t, :t)", t);
+          for (const id of [1, 2, 3]) {
+            db.run(
+              `INSERT INTO tasks (id, project_id, number, status_id, title, title_fold, description_fold, rank, created_at, updated_at)
+               VALUES (:id, 1, :id, 1, 'Task', 'task', '', 'a0', :t, :t)`,
+              { id, ...t },
+            );
+          }
+          expect(migrate(db, SPACE_MIGRATIONS, { appVersion: '2.0.1' })).toEqual({ from: 3, to: 4 });
+          expect(meta(db)).toMatchObject({ version: '4', compatible_from: '1' });
+          db.run('INSERT INTO task_links (blocker_id, blocked_id, created_at) VALUES (1, 2, :t), (2, 3, :t)', t);
+          expect(() => db.run('INSERT INTO task_links (blocker_id, blocked_id, created_at) VALUES (3, 3, :t)', t)).toThrow(/CHECK/);
+          expect(() => db.run('INSERT INTO task_links (blocker_id, blocked_id, created_at) VALUES (1, 9, :t)', t)).toThrow(/FOREIGN KEY/);
+          db.run('DELETE FROM tasks WHERE id = 2');
+          expect(db.all('SELECT * FROM task_links')).toEqual([]);
+          expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
         }));
 
       it('space: the users mirror refuses rows its CHECKs forbid', () =>

@@ -28,6 +28,7 @@ import { parseBounded } from '@shared/bounded';
 import type { EstimateUnit } from '@shared/constants';
 import { normalizeEmail } from '@shared/email';
 import { EXPORT_TABLES, exportFrameSchema, exportRowSchemas, type ExportTable } from '@shared/export';
+import { findCycle as linkCycle, type TaskLink } from '@shared/schedule';
 import { badRequest, issueDetail, limitDetails } from '../../http/errors';
 
 /** Problems listed in a 400 response at most (the message states the total). */
@@ -222,6 +223,7 @@ function checkIntegrity(version: 1 | 2, { frame, rows }: { frame: Frame; rows: R
   });
 
   const numbers = new Set<string>();
+  const links: TaskLink[] = [];
   d.tasks.forEach((t, i) => {
     if (!projectIds.has(t.projectId)) add(`tasks.${i}.projectId`, `Task ${t.id}: project ${t.projectId} does not exist`);
     if (!statusIds.has(t.statusId)) add(`tasks.${i}.statusId`, `Task ${t.id}: status ${t.statusId} does not exist`);
@@ -238,7 +240,17 @@ function checkIntegrity(version: 1 | 2, { frame, rows }: { frame: Frame; rows: R
     if (numbers.has(numberKey)) add(`tasks.${i}.number`, `Task ${t.id}: number ${t.number} is used twice in project ${t.projectId}`);
     numbers.add(numberKey);
     userRef(`tasks.${i}.createdBy`, `Task ${t.id}`, t.createdBy);
+    const blockedBy = 'blockedBy' in t && Array.isArray(t.blockedBy) ? (t.blockedBy as number[]) : [];
+    const unknownBlockers = [...new Set(blockedBy)].filter((id) => !taskIds.has(id) || id === t.id);
+    if (unknownBlockers.length > 0) {
+      add(`tasks.${i}.blockedBy`, `Task ${t.id}: unknown or own blocker id${unknownBlockers.length > 1 ? 's' : ''} ${idList(unknownBlockers)}`);
+    } else {
+      for (const blockerId of blockedBy) links.push({ blockerId, blockedId: t.id });
+    }
   });
+  // The links must not loop (task dependencies): one walk of them.
+  const looped = linkCycle(links);
+  if (looped !== null) add('tasks', `Task ${looped}: its blockers loop back to it`);
 
   d.comments.forEach((cm, i) => {
     if (!taskIds.has(cm.taskId)) add(`comments.${i}.taskId`, `Comment ${cm.id}: task ${cm.taskId} does not exist`);

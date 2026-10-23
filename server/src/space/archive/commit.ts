@@ -105,6 +105,9 @@ export function planImport(
   return { archive, importerId: o.importerId, targets, accounts, skipActivity };
 }
 
+/** Distinct blocker ids of an archived task, ascending (its task_links rows; none in archives before them). */
+const linksOf = (t: { blockedBy?: readonly number[] }) => [...new Set(t.blockedBy ?? [])].sort((a, b) => a - b);
+
 /** Distinct tag ids of a task, ascending (its task_tags rows, and its tag_ids as the trigger writes them). */
 const tagsOf = (tagIds: readonly number[]) => [...new Set(tagIds)].sort((a, b) => a - b);
 
@@ -122,6 +125,7 @@ export function rowsToInsert(plan: ImportPlan): TableRows {
     epics: counts.epics,
     tasks: counts.tasks,
     task_tags: archive.tasks.reduce((n, t) => n + tagsOf(t.tagIds).length, 0),
+    task_links: archive.tasks.reduce((n, t) => n + linksOf(t).length, 0),
     comments: counts.comments,
     work_logs: counts.worklogs,
     activity: counts.activity,
@@ -169,6 +173,7 @@ const MAX_CONFIG_CHARS = ACTIVITY_DATA_MAX_CHARS;
 const DELETE_ORDER = [
   'tasks',
   'task_tags',
+  'task_links',
   'comments',
   'work_logs',
   'activity',
@@ -180,8 +185,8 @@ const DELETE_ORDER = [
   'statuses',
 ] as const;
 
-/** Domain tables with an AUTOINCREMENT id (everything but task_tags). */
-const SEQUENCED = DELETE_ORDER.filter((t) => t !== 'task_tags');
+/** Domain tables with an AUTOINCREMENT id (everything but task_tags and task_links). */
+const SEQUENCED = DELETE_ORDER.filter((t) => t !== 'task_tags' && t !== 'task_links');
 
 /** A JSON.stringify replacer that leaves out `__proto__` keys (activity data is the file's object, validate.ts). */
 const withoutProto = (key: string, value: unknown) => (key === '__proto__' ? undefined : value);
@@ -424,6 +429,13 @@ export function writeImport(db: Db, plan: ImportPlan, o: { now: string; safety: 
         comment_count: commentCount.get(t.id) ?? 0,
         worklog_minutes: loggedMinutes.get(t.id) ?? 0,
       })),
+    );
+    // Task dependencies, after both ends exist (no trigger reads them).
+    insertRows(
+      db,
+      'task_links',
+      ['blocker_id', 'blocked_id', 'created_at'],
+      d.tasks.flatMap((t) => linksOf(t).map((blockerId) => ({ blocker_id: blockerId, blocked_id: t.id, created_at: now }))),
     );
 
     const activity = plan.skipActivity ? [] : d.activity;

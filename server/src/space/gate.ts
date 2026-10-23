@@ -95,6 +95,10 @@ export const GATE_RULES: Readonly<Record<string, GateRule>> = {
   'PATCH /api/tasks/:id': edit(),
   'DELETE /api/tasks/:id': remove(),
   'POST /api/tasks/:id/duplicate': edit(),
+  'POST /api/tasks/:id/blockers': edit(),
+  'DELETE /api/tasks/:id/blockers/:blockerId': remove(),
+  'POST /api/tasks/rebaseline/preview': view(), // a read sent as POST
+  'POST /api/tasks/rebaseline': edit(),
 
   'GET /api/tasks/:id/timeline': view(),
   'POST /api/tasks/:id/comments': edit(),

@@ -282,6 +282,28 @@ export interface TaskDTO {
   commentCount: number;
   /** Sum of minutes across the task's work logs. */
   worklogMinutes: number;
+  /** The tasks this one waits on (finish-to-start links; docs/design/task-dependencies.md), ids ascending. */
+  blockedBy: number[];
+  /** The tasks waiting on this one, ids ascending. */
+  blocks: number[];
+  /**
+   * The start and due dates its blockers allow (shared/src/schedule.ts), as of the request's `today` (the server's
+   * date for a write's answer). Equal to startDate / dueDate unless the task slipped.
+   */
+  adjustedStartDate: string | null;
+  adjustedDueDate: string | null;
+  /** Days adjustedDueDate lies after dueDate: > 0 for a slipped task, else 0. */
+  slipDays: number;
+}
+
+/** One task a rebaseline moves (POST /api/tasks/rebaseline and its preview). */
+export interface RebaselineItemDTO {
+  taskId: number;
+  ref: string;
+  title: string;
+  from: { startDate: string | null; dueDate: string | null };
+  to: { startDate: string | null; dueDate: string | null };
+  slipDays: number;
 }
 
 export interface TaskQueryResult {
@@ -369,6 +391,8 @@ export interface ActivityData {
   minutes?: number | null;
   date?: string;
   note?: string;
+  /** task.updated: the date changes of a rebaseline (accepting a slip), not an edit by hand. */
+  rebaseline?: boolean;
   [key: string]: unknown;
 }
 
@@ -536,6 +560,8 @@ export interface DashboardDTO {
   counts: { overdue: number; dueToday: number; dueSoon: number; inProgress: number; recentlyClosed: number };
   /** Number of distinct projects with tasks in a 'started' status (uncapped, like counts.inProgress). */
   inProgressProjects: number;
+  /** Open tasks whose blockers push their due date later (`slipped` filter; uncapped). */
+  slipped: number;
   recentActivity: ActivityDTO[];
   worklog: { todayMinutes: number; weekMinutes: number };
 }
@@ -581,6 +607,9 @@ export interface ApiErrorBody {
   };
 }
 
+/** A task's links and the dates they imply: derived, so never in an export (an archive carries `blockedBy`). */
+type TaskLinkFields = 'blockedBy' | 'blocks' | 'adjustedStartDate' | 'adjustedDueDate' | 'slipDays';
+
 /** Import provenance (design §8.6): not part of the v1 export format. */
 type Provenance = 'importedBy' | 'importedAt';
 
@@ -599,7 +628,7 @@ export interface ExportDTO {
   projects: Array<Omit<ProjectDTO, 'stats'> & { taskCounter: number }>;
   milestones: Array<Omit<MilestoneDTO, 'stats'>>;
   epics: Array<Omit<EpicDTO, 'stats'>>;
-  tasks: Array<Omit<TaskDTO, 'ref' | 'milestoneId' | 'tags' | 'commentCount' | 'worklogMinutes'> & { tagIds: number[] }>;
+  tasks: Array<Omit<TaskDTO, 'ref' | 'milestoneId' | 'tags' | 'commentCount' | 'worklogMinutes' | TaskLinkFields> & { tagIds: number[] }>;
   comments: Array<Omit<CommentDTO, 'author' | Provenance> & { authorId: number | null }>;
   worklogs: Array<Omit<WorklogDTO, 'author' | Provenance> & { authorId: number | null }>;
   activity: Array<Omit<ActivityDTO, 'actor' | 'task' | Provenance> & { actorId: number | null }>;
@@ -642,7 +671,8 @@ export interface SpaceArchiveDTO {
   projects: ExportDTO['projects'];
   milestones: ExportDTO['milestones'];
   epics: ExportDTO['epics'];
-  tasks: ExportDTO['tasks'];
+  /** `blockedBy`: the task's blockers (task dependencies); absent in archives written before them. */
+  tasks: Array<ExportDTO['tasks'][number] & { blockedBy?: number[] }>;
   comments: Array<ExportDTO['comments'][number] & ArchiveProvenance>;
   worklogs: Array<ExportDTO['worklogs'][number] & ArchiveProvenance>;
   activity: Array<ExportDTO['activity'][number] & ArchiveProvenance>;

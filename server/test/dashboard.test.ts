@@ -69,6 +69,7 @@ describe('GET /api/dashboard', () => {
       recentlyClosed: [],
       counts: { overdue: 0, dueToday: 0, dueSoon: 0, inProgress: 0, recentlyClosed: 0 },
       inProgressProjects: 0,
+      slipped: 0,
       recentActivity: [],
       worklog: { todayMinutes: 0, weekMinutes: 0 },
     });

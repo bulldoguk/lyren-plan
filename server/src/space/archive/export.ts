@@ -91,6 +91,15 @@ const provenance = (r: { imported_by: number | null; imported_at: string | null 
 
 /** The archive of the space in `db` as JSON text, in pieces (see the header). */
 export function* archivePieces(db: Db, info: ArchiveInfo): Generator<string> {
+  // Each task's blockers (task dependencies), written on the task as `blockedBy`: one read of the links.
+  const blockers = new Map<number, number[]>();
+  for (const l of db.all<{ blocker_id: number; blocked_id: number }>(
+    'SELECT blocker_id, blocked_id FROM task_links ORDER BY blocked_id, blocker_id',
+  )) {
+    const list = blockers.get(l.blocked_id);
+    if (list) list.push(l.blocker_id);
+    else blockers.set(l.blocked_id, [l.blocker_id]);
+  }
   const referenced = referencedUserIds(db);
   referenced.add(info.exportedBy);
   const users: ArchiveUser[] = db
@@ -183,6 +192,7 @@ export function* archivePieces(db: Db, info: ArchiveInfo): Generator<string> {
     createdAt: t.created_at,
     updatedAt: t.updated_at,
     tagIds: parseJson(t.tag_ids, []) as number[],
+    ...(blockers.has(t.id) ? { blockedBy: blockers.get(t.id)! } : {}),
   }));
   yield* list<CommentRow>('comments', pages<CommentRow>(db, 'comments'), (cm) => ({
     id: cm.id,

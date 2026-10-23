@@ -295,6 +295,12 @@ function oldHydrateTasks(db: Db, rows: readonly TaskRow[]): TaskDTO[] {
     tags: tags.get(r.id) ?? [],
     commentCount: comments.get(r.id) ?? 0,
     worklogMinutes: minutes.get(r.id) ?? 0,
+    // These suites link no tasks: every task keeps its own dates.
+    blockedBy: [],
+    blocks: [],
+    adjustedStartDate: r.start_date,
+    adjustedDueDate: r.due_date,
+    slipDays: 0,
   }));
 }
 
@@ -425,6 +431,7 @@ function oldDashboard(db: Db, ctx: TaskWhereContext, userId: number): DashboardD
       recentlyClosed: recentlyClosed.total.tasks,
     },
     inProgressProjects: inProgress.total.projects,
+    slipped: 0,
     recentActivity: listActivity(db, { limit: DASHBOARD_LIMITS.recentActivity }).items,
     worklog: { todayMinutes: worklog?.today_minutes ?? 0, weekMinutes: worklog?.week_minutes ?? 0 },
   };

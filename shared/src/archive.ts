@@ -54,6 +54,8 @@ const rows = exportRowSchemasFor(archiveUserRefSchema);
 /** One row of each table of an archive (checked one at a time, as a v1 export's are). */
 export const archiveRowSchemas = {
   ...rows,
+  /** `blockedBy`: the task's blockers (task dependencies), absent in archives written before them. */
+  tasks: rows.tasks.extend({ blockedBy: z.array(exportIdSchema).max(10_000).optional() }),
   comments: rows.comments.extend(provenance),
   worklogs: rows.worklogs.extend(provenance),
   activity: rows.activity.extend(provenance),

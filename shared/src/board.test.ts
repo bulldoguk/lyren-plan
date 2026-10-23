@@ -17,7 +17,8 @@ const task = (over: Partial<TaskDTO> = {}): TaskDTO => ({
   id: 1, projectId: 1, number: 1, ref: 'P-1', epicId: null, milestoneId: null, statusId: 1, priority: 0,
   title: 't', description: '', startDate: null, dueDate: null, estimate: null, rank: 'a0', completedAt: null,
   archivedAt: null, createdBy: null, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
-  tags: [], commentCount: 0, worklogMinutes: 0, ...over,
+  tags: [], commentCount: 0, worklogMinutes: 0, blockedBy: [], blocks: [], adjustedStartDate: null,
+  adjustedDueDate: null, slipDays: 0, ...over,
 });
 
 const ctx = buildFilterContext({

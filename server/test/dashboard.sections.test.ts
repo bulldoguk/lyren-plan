@@ -14,7 +14,8 @@ import { insertProject, insertTask, statusIdByName, T0 } from './services.fixtur
 const TODAY = '2026-05-20';
 const HOUR = 3_600_000;
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
-const SECTIONS: DashboardSection[] = ['overdue', 'dueToday', 'dueSoon', 'inProgress', 'recentlyClosed'];
+/** The sections the server lists ('slipped' is the client's: DashboardDTO counts it only). */
+const SECTIONS: Array<Exclude<DashboardSection, 'slipped'>> = ['overdue', 'dueToday', 'dueSoon', 'inProgress', 'recentlyClosed'];
 
 describe('dashboard sections through POST /api/tasks/query', () => {
   it('reproduce every dashboard list and count, truncated lists included', async () => {

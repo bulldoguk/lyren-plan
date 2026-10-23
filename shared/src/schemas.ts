@@ -358,6 +358,8 @@ export const taskFilterSchema = z.object({
   closedWithinDays: z.number().int().min(0).max(3650).nullable().optional(),
   /** Tasks of projects whose status is 'archived' are excluded unless this is true or projectIds lists them. */
   includeArchivedProjects: z.boolean().optional(),
+  /** true: only slipped tasks (their blockers push the due date later; docs/design/task-dependencies.md). */
+  slipped: z.boolean().optional(),
 });
 export type TaskFilter = z.infer<typeof taskFilterSchema>;
 
@@ -533,6 +535,26 @@ export const searchQueryInput = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 export type SearchQueryInput = z.infer<typeof searchQueryInput>;
+
+/** POST /api/tasks/:id/blockers: make `blockerId` block the task. */
+export const taskLinkInput = z.object({ blockerId: idSchema });
+export type TaskLinkInput = z.input<typeof taskLinkInput>;
+
+/** GET /api/tasks/:id?today=: the client's date, for the adjusted dates (default the server's UTC date). */
+export const taskReadQuery = z.object({ today: isoDateSchema.optional() });
+
+/** POST /api/tasks/rebaseline(/preview): the slipped tasks of one project, or of a selection. */
+export const rebaselineInput = z
+  .object({
+    projectId: idSchema.optional(),
+    ids: z.array(idSchema).min(1).max(LIMITS.bulkMax).optional(),
+    today: isoDateSchema.optional(),
+  })
+  .refine((v) => (v.projectId === undefined) !== (v.ids === undefined), {
+    message: 'Give a project or a selection of tasks',
+    path: ['projectId'],
+  });
+export type RebaselineInput = z.output<typeof rebaselineInput>;
 
 export const dashboardQueryInput = z.object({
   today: isoDateSchema.optional(),

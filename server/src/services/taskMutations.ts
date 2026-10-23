@@ -11,6 +11,7 @@ import { fold } from '../core/fold';
 import type { Db } from '../db';
 import { badRequest } from '../http/errors';
 import { recordActivity, taskChanges } from './activity';
+import { noteBlockerDeleted } from './schedule';
 import { defaultStatusId, nextTaskNumber, requireTagIds, requireTask } from './entities';
 import { toTagRef } from './mappers';
 import { rankForNewTask, rankForPosition } from './rank';
@@ -387,6 +388,8 @@ export function updateTask(db: Db, actor: MutationActor, id: number, input: Task
 export function deleteTask(db: Db, actor: MutationActor, id: number): void {
   db.tx(() => {
     const row = requireTask(db, id);
+    // Its links go by cascade; the tasks it blocked note that their blocker went.
+    noteBlockerDeleted(db, actor, row);
     recordActivity(db, {
       userId: actor.userId,
       projectId: row.project_id,

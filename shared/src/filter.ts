@@ -29,6 +29,14 @@ export function searchTokens(search: string | undefined): string[] {
   return search.trim().toLowerCase().split(/\s+/).filter(Boolean);
 }
 
+/**
+ * The due date filters and sorting go by: the adjusted due date of a slipped task (its blockers push it later;
+ * ./schedule.ts), else the task's own. The SQL twin replaces t.due_date for the slipped tasks only.
+ */
+export function effectiveDueDate(task: Pick<TaskDTO, 'dueDate' | 'adjustedDueDate' | 'slipDays'>): ISODate | null {
+  return task.slipDays > 0 ? task.adjustedDueDate : task.dueDate;
+}
+
 function nonEmpty<T>(arr: readonly T[] | undefined): arr is readonly T[] {
   return Array.isArray(arr) && arr.length > 0;
 }
@@ -78,32 +86,35 @@ export function matchesTaskFilter(task: TaskDTO, filter: TaskFilter, ctx: Filter
   }
   if (nonEmpty(filter.excludeTagIds) && filter.excludeTagIds.some((id) => taskTagIds.includes(id))) return false;
 
-  // Due presets (ORed)
+  // Due presets (ORed), on the adjusted due date of a slipped task
+  const dueDate = effectiveDueDate(task);
   if (nonEmpty(filter.due)) {
     const ok = filter.due.some((preset) => {
       const r = resolveDuePreset(preset, ctx.today, ctx.weekStartsOn);
       switch (r.kind) {
         case 'overdue':
-          return task.dueDate !== null && task.dueDate < r.before && !closed;
+          return dueDate !== null && dueDate < r.before && !closed;
         case 'none':
-          return task.dueDate === null;
+          return dueDate === null;
         case 'any':
-          return task.dueDate !== null;
+          return dueDate !== null;
         case 'range':
           return (
-            task.dueDate !== null &&
-            (r.from === null || task.dueDate >= r.from) &&
-            (r.to === null || task.dueDate <= r.to)
+            dueDate !== null &&
+            (r.from === null || dueDate >= r.from) &&
+            (r.to === null || dueDate <= r.to)
           );
       }
     });
     if (!ok) return false;
   }
   if (filter.dueFrom || filter.dueTo) {
-    if (task.dueDate === null) return false;
-    if (filter.dueFrom && task.dueDate < filter.dueFrom) return false;
-    if (filter.dueTo && task.dueDate > filter.dueTo) return false;
+    if (dueDate === null) return false;
+    if (filter.dueFrom && dueDate < filter.dueFrom) return false;
+    if (filter.dueTo && dueDate > filter.dueTo) return false;
   }
+
+  if (filter.slipped && !(task.slipDays > 0)) return false;
 
   // Search: every token must appear in title, description or ref (case-insensitive).
   const tokens = searchTokens(filter.search);
@@ -148,7 +159,7 @@ const cmpPrimitive = <T extends string | number>(x: T, y: T): number => (x < y ?
 /**
  * Comparator implementing TaskSort. Rules (mirrored by the SQL ORDER BY):
  *  - 'manual': rank, then id (dir 'desc' reverses both).
- *  - dueDate/startDate/estimate: nulls always last, dir applies to non-null values.
+ *  - dueDate/startDate/estimate: nulls always last, dir applies to non-null values; dueDate is effectiveDueDate.
  *  - priority: 0 ("no priority") always last; dir applies to 1..4 ('desc' = urgent first).
  *  - title: case-insensitive (ASCII lower-casing, like SQLite NOCASE).
  *  - status: by status position.
@@ -168,7 +179,7 @@ export function compareTasks(a: TaskDTO, b: TaskDTO, sort: TaskSort, ctx: SortCo
       break;
     }
     case 'dueDate':
-      r = cmpNullsLast(a.dueDate, b.dueDate, (x, y) => sign * cmpPrimitive(x, y));
+      r = cmpNullsLast(effectiveDueDate(a), effectiveDueDate(b), (x, y) => sign * cmpPrimitive(x, y));
       break;
     case 'startDate':
       r = cmpNullsLast(a.startDate, b.startDate, (x, y) => sign * cmpPrimitive(x, y));
