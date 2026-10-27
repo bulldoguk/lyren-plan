@@ -142,6 +142,18 @@ describe('plain connections (SMTP_SECURITY=none)', () => {
     expect(gone.message).toMatch(new RegExp(`^Could not connect to the SMTP server localhost:${s.port}: .*ECONNREFUSED`));
   });
 
+  it('names every address that refused when the host has several (an empty AggregateError)', async () => {
+    const refused = (address: string) => Object.assign(new Error(`connect ECONNREFUSED ${address}:2525`), { code: 'ECONNREFUSED' });
+    const both = Object.assign(new AggregateError([refused('::1'), refused('127.0.0.1')]), { code: 'ECONNREFUSED' });
+    const err = await failure(sendSmtp(smtp(2525), { connect: () => Promise.reject(both) }, envelope, message, { timeouts: FAST }));
+    expect(err.message).toBe(
+      'Could not connect to the SMTP server localhost:2525: connect ECONNREFUSED ::1:2525; connect ECONNREFUSED 127.0.0.1:2525',
+    );
+    const bare = Object.assign(new AggregateError([]), { code: 'ECONNREFUSED' });
+    const none = await failure(sendSmtp(smtp(2525), { connect: () => Promise.reject(bare) }, envelope, message, { timeouts: FAST }));
+    expect(none.message).toBe('Could not connect to the SMTP server localhost:2525: ECONNREFUSED');
+  });
+
   it('never sends credentials without TLS (the configuration refuses that too)', async () => {
     const s = await server();
     const err = await failure(sendSmtp(smtp(s.port, { user: USER, pass: PASSWORD }), createNodeSmtpConnector(), envelope, message, { timeouts: FAST }));

@@ -238,6 +238,20 @@ export interface SmtpTransportOptions {
   timeouts?: SmtpTimeouts;
 }
 
+/**
+ * Why a connection failed. When a host has several addresses (localhost: ::1 and 127.0.0.1) and every
+ * one fails, Node's autoSelectFamily rejects with an AggregateError whose message is empty: name each
+ * address's error instead.
+ */
+function connectErrorText(err: unknown): string {
+  if (err instanceof AggregateError && !err.message) {
+    const causes = err.errors.map((e) => String((e as Error)?.message ?? e)).filter(Boolean);
+    if (causes.length > 0) return causes.join('; ');
+    if ('code' in err && typeof err.code === 'string') return err.code;
+  }
+  return String((err as Error)?.message ?? err);
+}
+
 /** Sends one message over a new connection; returns its Message-ID. */
 export async function sendSmtp(
   config: SmtpConfig,
@@ -266,7 +280,7 @@ export async function sendSmtp(
     // A connection that arrives after its timeout is closed at once.
     void connecting.then((late) => late.close()).catch(() => {});
     const how = config.security === 'tls' ? ` with TLS (its certificate must be valid for ${config.host})` : '';
-    throw new MailError(`Could not connect to the SMTP server ${where}${how}: ${redact(String((err as Error)?.message ?? err), secrets)}`);
+    throw new MailError(`Could not connect to the SMTP server ${where}${how}: ${redact(connectErrorText(err), secrets)}`);
   }
 
   const session = new Session(socket, timeouts, startedAt + totalMs, secrets);
