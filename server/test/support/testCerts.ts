@@ -37,14 +37,17 @@ function openssl(dir: string, args: string[]): void {
 /** Certificates in a new folder under `parent` (default the system temp folder); remove `dir` when done. */
 export function makeTestCerts(parent: string = os.tmpdir()): TestCerts {
   const dir = fs.mkdtempSync(path.join(parent, 'lyren-certs-'));
-  const ec = ['-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes'];
+  // named_curve: LibreSSL (macOS's /usr/bin/openssl) otherwise writes the curve out as explicit
+  // parameters, which Node's OpenSSL refuses.
+  const ec = ['-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-pkeyopt', 'ec_param_enc:named_curve', '-nodes'];
   openssl(dir, ['req', '-x509', ...ec, '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '2', '-subj', '/CN=Lyren Plan test CA',
     '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign']);
   const leaf = (name: string, san: string) => {
     fs.writeFileSync(path.join(dir, `${name}.cnf`), `subjectAltName=${san}\nextendedKeyUsage=serverAuth\nbasicConstraints=critical,CA:FALSE\n`);
     openssl(dir, ['req', ...ec, '-keyout', `${name}.key`, '-out', `${name}.csr`, '-subj', `/CN=${name}`]);
-    openssl(dir, ['x509', '-req', '-in', `${name}.csr`, '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', `${name}.pem`,
-      '-days', '2', '-extfile', `${name}.cnf`]);
+    // -sha256: LibreSSL signs with SHA-1 by default, which Node's OpenSSL refuses too.
+    openssl(dir, ['x509', '-req', '-sha256', '-in', `${name}.csr`, '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial',
+      '-out', `${name}.pem`, '-days', '2', '-extfile', `${name}.cnf`]);
   };
   leaf('localhost', 'DNS:localhost,IP:127.0.0.1');
   leaf('other', 'DNS:other.example');
